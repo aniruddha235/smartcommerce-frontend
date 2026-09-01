@@ -1,13 +1,11 @@
-import React from 'react';
-import { X, Plus, Minus, Trash2, ShoppingBag, CreditCard } from 'lucide-react';
+import React, { useState } from 'react';
 import { useCart } from '../context/CartContext';
 
-// Helper function to dynamically inject Razorpay SDK script
+// Helper to dynamically load the Razorpay checkout script
 const loadRazorpayScript = () => {
   return new Promise((resolve) => {
     if (window.Razorpay) {
-      resolve(true);
-      return;
+      return resolve(true);
     }
     const script = document.createElement('script');
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
@@ -18,147 +16,175 @@ const loadRazorpayScript = () => {
 };
 
 export default function CartDrawer({ isOpen, onClose }) {
-  const { cart, updateQuantity, removeFromCart, clearCart, totalAmount } = useCart();
+  const { cart, removeFromCart, updateQuantity, clearCart } = useCart();
+  const [loading, setLoading] = useState(false);
 
-  if (!isOpen) return null;
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+  const razorpayKeyId = import.meta.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_dummyKeyId';
+
+  const totalPrice = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
   const handleCheckout = async () => {
-    const res = await loadRazorpayScript();
+    if (cart.length === 0) return;
 
-    if (!res) {
+    setLoading(true);
+
+    // 1. Load Razorpay SDK
+    const isScriptLoaded = await loadRazorpayScript();
+    if (!isScriptLoaded) {
       alert('Failed to load Razorpay SDK. Please check your internet connection.');
+      setLoading(false);
       return;
     }
 
-    // Razorpay modal configuration (uses test mode default key)
-    const options = {
-      key: 'rzp_test_1234567890abcdef', // Replace with your real Razorpay Test Key if available
-      amount: totalAmount * 100, // Amount must be passed in smallest currency sub-unit (paise)
-      currency: 'INR',
-      name: 'SmartCommerce AI Store',
-      description: 'Order Payment Checkout',
-      handler: function (response) {
-        alert(`Payment Successful!\nPayment ID: ${response.razorpay_payment_id}`);
-        clearCart();
-        onClose();
-      },
-      prefill: {
-        name: 'John Doe',
-        email: 'johndoe@example.com',
-        contact: '9999999999',
-      },
-      theme: {
-        color: '#2563eb',
-      },
-    };
+    try {
+      // 2. Create order on backend
+      const orderRes = await fetch(`${backendUrl}/api/payment/order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: totalPrice, currency: 'INR' }),
+      });
 
-    const paymentObject = new window.Razorpay(options);
-    paymentObject.open();
+      const orderData = await orderRes.json();
+
+      if (!orderRes.ok || !orderData.id) {
+        throw new Error(orderData.error || 'Failed to initialize payment order');
+      }
+
+      // 3. Configure Razorpay modal options
+      const options = {
+        key: razorpayKeyId,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        name: 'SmartCommerce AI',
+        description: 'Order Payment',
+        order_id: orderData.id,
+        handler: async function (response) {
+          // 4. Verify payment signature on backend
+          try {
+            const verifyRes = await fetch(`${backendUrl}/api/payment/verify`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              }),
+            });
+
+            const verifyData = await verifyRes.json();
+
+            if (verifyData.success) {
+              alert('Payment Successful! Order Confirmed.');
+              clearCart();
+              onClose();
+            } else {
+              alert('Payment verification failed: ' + verifyData.message);
+            }
+          } catch (err) {
+            console.error('Verification error:', err);
+            alert('Payment verification failed.');
+          } finally {
+            setLoading(false);
+          }
+        },
+        modal: {
+          ondismiss: function () {
+            setLoading(false);
+          },
+        },
+        theme: {
+          color: '#2563eb',
+        },
+      };
+
+      const paymentObject = new window.Razorpay(options);
+      paymentObject.open();
+    } catch (error) {
+      console.error('Checkout error:', error);
+      alert(error.message || 'Payment initiation failed');
+      setLoading(false);
+    }
   };
 
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        width: '100vw',
-        height: '100vh',
-        backgroundColor: 'rgba(0, 0, 0, 0.4)',
-        display: 'flex',
-        justifyContent: 'flex-end',
-        zIndex: 1000,
-      }}
-      onClick={onClose}
-    >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: '380px',
-          height: '100%',
-          backgroundColor: '#ffffff',
-          display: 'flex',
-          flexDirection: 'column',
-          boxShadow: '-4px 0 16px rgba(0,0,0,0.15)',
-          padding: '20px',
-          boxSizing: 'border-box',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Drawer Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e5e7eb', paddingBottom: '16px' }}>
-          <h2 style={{ margin: 0, fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <ShoppingBag size={20} color="#2563eb" /> Your Cart
-          </h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
-            <X size={22} color="#6b7280" />
-          </button>
-        </div>
+  if (!isOpen) return null;
 
-        {/* Cart Item List */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 0' }}>
-          {cart.length === 0 ? (
-            <p style={{ textAlign: 'center', color: '#9ca3af', marginTop: '40px' }}>Your cart is empty.</p>
-          ) : (
-            cart.map((item) => (
-              <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f3f4f6', paddingBottom: '12px', marginBottom: '12px' }}>
-                <div>
-                  <h4 style={{ margin: '0 0 4px 0', fontSize: '0.95rem' }}>{item.name}</h4>
-                  <span style={{ color: '#4b5563', fontSize: '0.85rem' }}>₹{item.price} × {item.quantity}</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', border: '1px solid #d1d5db', borderRadius: '4px' }}>
-                    <button onClick={() => updateQuantity(item.id, -1)} style={{ background: 'none', border: 'none', padding: '4px 8px', cursor: 'pointer' }}>
-                      <Minus size={12} />
-                    </button>
-                    <span style={{ padding: '0 6px', fontSize: '0.85rem' }}>{item.quantity}</span>
-                    <button onClick={() => updateQuantity(item.id, 1)} style={{ background: 'none', border: 'none', padding: '4px 8px', cursor: 'pointer' }}>
-                      <Plus size={12} />
-                    </button>
+  return (
+    <div className="fixed inset-0 z-50 overflow-hidden">
+      <div 
+        className="absolute inset-0 bg-black bg-opacity-50 transition-opacity" 
+        onClick={onClose} 
+      />
+
+      <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
+        <div className="w-screen max-w-md bg-white shadow-xl flex flex-col">
+          <div className="p-4 border-b flex justify-between items-center">
+            <h2 className="text-lg font-bold text-gray-800">Shopping Cart</h2>
+            <button 
+              onClick={onClose}
+              className="text-gray-500 hover:text-gray-700 font-bold text-xl"
+            >
+              &times;
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {cart.length === 0 ? (
+              <p className="text-gray-500 text-center mt-8">Your cart is empty.</p>
+            ) : (
+              cart.map((item) => (
+                <div key={item.id} className="flex items-center space-x-4 border-b pb-3">
+                  <img 
+                    src={item.image} 
+                    alt={item.name} 
+                    className="w-16 h-16 object-cover rounded" 
+                  />
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-gray-800 text-sm">{item.name}</h3>
+                    <p className="text-gray-600 text-sm">${item.price.toFixed(2)}</p>
+                    <div className="flex items-center space-x-2 mt-1">
+                      <button
+                        onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                        className="px-2 py-0.5 bg-gray-200 rounded text-xs"
+                      >
+                        -
+                      </button>
+                      <span className="text-xs font-semibold">{item.quantity}</span>
+                      <button
+                        onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                        className="px-2 py-0.5 bg-gray-200 rounded text-xs"
+                      >
+                        +
+                      </button>
+                    </div>
                   </div>
-                  <button onClick={() => removeFromCart(item.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px' }}>
-                    <Trash2 size={16} />
+                  <button
+                    onClick={() => removeFromCart(item.id)}
+                    className="text-red-500 hover:text-red-700 text-xs font-medium"
+                  >
+                    Remove
                   </button>
                 </div>
-              </div>
-            ))
-          )}
-        </div>
+              ))
+            )}
+          </div>
 
-        {/* Drawer Footer */}
-        {cart.length > 0 && (
-          <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px', fontWeight: 'bold', fontSize: '1.1rem' }}>
-              <span>Total:</span>
-              <span>₹{totalAmount}</span>
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={clearCart} style={{ flex: 1, backgroundColor: '#f3f4f6', color: '#374151', border: 'none', padding: '10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '500' }}>
-                Clear
-              </button>
+          {cart.length > 0 && (
+            <div className="p-4 border-t bg-gray-50 space-y-4">
+              <div className="flex justify-between font-bold text-base text-gray-800">
+                <span>Total:</span>
+                <span>${totalPrice.toFixed(2)}</span>
+              </div>
               <button
                 onClick={handleCheckout}
-                style={{
-                  flex: 2,
-                  backgroundColor: '#2563eb',
-                  color: '#fff',
-                  border: 'none',
-                  padding: '10px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontWeight: '500',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px'
-                }}
+                disabled={loading}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded transition-colors disabled:opacity-50"
               >
-                <CreditCard size={18} />
-                Pay via Razorpay
+                {loading ? 'Processing...' : 'Pay with Razorpay'}
               </button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
