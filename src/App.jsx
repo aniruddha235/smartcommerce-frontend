@@ -17,12 +17,13 @@ function App() {
   useEffect(() => {
     const fetchProducts = async () => {
       try {
-        const response = await axios.get('http://localhost:5000/api/products');
+        // Replace https://smartcommerce-backend.onrender.com/api/api/products with:
+const response = await axios.get('https://smartcommerce-backend.onrender.com/api/products');
         setProducts(response.data);
         setLoading(false);
       } catch (err) {
         console.error('Error fetching products:', err);
-        setError('Failed to connect to backend server at http://localhost:5000');
+        setError('Failed to connect to backend server at https://smartcommerce-backend.onrender.com/api');
         setLoading(false);
       }
     };
