@@ -17,9 +17,9 @@ export default function SearchBar({ onSearchResults }) {
     setLoading(true);
 
     try {
-      const response = await axios.post('http://localhost:5000/api/search', {
-        query: targetQuery
-      });
+    const response = await axios.post('https://smartcommerce-backend.onrender.com/api/search', {
+      query: targetQuery
+    });
       // Pass { explanation, products } object to parent component
       onSearchResults(response.data);
     } catch (error) {
